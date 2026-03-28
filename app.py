@@ -14,24 +14,22 @@ st.set_page_config(
     page_title="S&P 500 Market Breadth",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="collapsed" # Collapsed by default to give charts max width
+    initial_sidebar_state="collapsed"
 )
 
-# Injecting Custom CSS to maximize screen space and clean up Streamlit default padding
 st.markdown("""
     <style>
         .stApp { background-color: #0E1117; color: #FFFFFF; }
         h1 { color: #00E396; font-weight: 600; font-family: 'Inter', sans-serif; font-size: 2rem; margin-bottom: 0;}
         .block-container { padding-top: 1rem; padding-bottom: 1rem; max-width: 98%; }
-        /* Remove whitespace at top of columns */
         [data-testid="column"] { padding: 0 0.5rem; }
     </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DATA ARCHITECTURE (Cached)
+# 2. BULLETPROOF DATA ARCHITECTURE (No UI Elements Here)
 # ==========================================
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=86400, show_spinner=False)
 def get_sp500_universe():
     url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -40,13 +38,12 @@ def get_sp500_universe():
     table['Symbol'] = table['Symbol'].str.replace('.', '-', regex=False)
     return table['Symbol'].tolist(), dict(zip(table['Symbol'], table['GICS Sector']))
 
-@st.cache_data(ttl=604800)
+@st.cache_data(ttl=604800, show_spinner=False)
 def get_market_caps(tickers):
     caps, cap_categories = {}, {}
     for ticker in tickers:
         try:
             cap = yf.Ticker(ticker).fast_info['marketCap']
-            caps[ticker] = cap
             if cap >= 200_000_000_000: cap_categories[ticker] = 'Mega'
             elif cap >= 10_000_000_000: cap_categories[ticker] = 'Large'
             elif cap >= 2_000_000_000: cap_categories[ticker] = 'Mid'
@@ -56,9 +53,9 @@ def get_market_caps(tickers):
             cap_categories[ticker] = 'Unknown'
     return cap_categories
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_core_market_matrix(tickers):
-    st.toast("Syncing live market data...", icon="🔄")
+    # Removed st.toast from here to prevent cache crashing
     benchmarks = ['^GSPC', '^VIX', 'SPY', 'QQQ', 'DIA', 'IWM']
     all_tickers = list(set(tickers + benchmarks))
     prices = yf.download(all_tickers, period="4y", auto_adjust=True, progress=False)['Close'].ffill()
@@ -102,18 +99,21 @@ def calculate_dynamic_breadth(matrices, active_tickers, cap_categories):
     })
     return breadth.dropna(), latest
 
-# --- INITIALIZE DATA ---
+# ==========================================
+# 3. SAFE INITIALIZATION (UI Loading State)
+# ==========================================
 try:
-    sp500_tickers, sp500_sectors = get_sp500_universe()
-    market_cap_categories = get_market_caps(sp500_tickers)
-    core_matrices = fetch_core_market_matrix(sp500_tickers)
+    with st.spinner("Booting Market Engine... Fetching matrix data (~60 secs on first run)"):
+        sp500_tickers, sp500_sectors = get_sp500_universe()
+        market_cap_categories = get_market_caps(sp500_tickers)
+        core_matrices = fetch_core_market_matrix(sp500_tickers)
     data_loaded = True
 except Exception as e:
-    st.error(f"Data feed initializing. Error: {e}")
+    st.error(f"Market data feed is temporarily rate-limited by Yahoo Finance. Please try again in a few minutes. \n\nError details: {e}")
     data_loaded = False
 
 # ==========================================
-# 3. INTERACTIVE SIDEBAR & FILTERS
+# 4. INTERACTIVE SIDEBAR & DASHBOARD
 # ==========================================
 if data_loaded:
     st.sidebar.markdown("### ⚙️ Control Panel")
@@ -137,10 +137,7 @@ if data_loaded:
     mask = (breadth_ts.index >= date_range[0]) & (breadth_ts.index <= date_range[1])
     breadth_ts = breadth_ts.loc[mask]
 
-    # ==========================================
-    # 4. DASHBOARD LAYOUT & PRO CHARTS
-    # ==========================================
-    # UPGRADED PLOTTING ENGINE (Fixes Clutter, Adds Months)
+    # --- PLOTTING ENGINE ---
     def plot_line_chart(title, traces_dict, df_timeseries, y_range=[0, 100], hline=None):
         fig = go.Figure()
         for name, col_name, color in traces_dict:
@@ -155,17 +152,10 @@ if data_loaded:
         fig.update_layout(
             title=dict(text=title, font=dict(size=14, color="#E0E0E0"), y=0.95),
             template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            height=320, # Slightly taller to fit bottom legend
-            margin=dict(l=10, r=10, t=40, b=50), # Added bottom margin for legend
+            height=320, margin=dict(l=10, r=10, t=40, b=50), 
             yaxis=dict(range=y_range, gridcolor='#222631', zerolinecolor='#222631'),
-            xaxis=dict(
-                gridcolor='#222631', zerolinecolor='#222631', showgrid=False,
-                tickformat="%b '%y", # Show Month and Year (e.g. Jan '24)
-                dtick="M3",          # Tick every 3 months
-                tickangle=-45        # Angle to prevent overlap
-            ),
+            xaxis=dict(gridcolor='#222631', zerolinecolor='#222631', showgrid=False, tickformat="%b '%y", dtick="M3", tickangle=-45),
             hovermode="x unified",
-            # Legend moved to the bottom center to prevent overlapping lines
             legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="center", x=0.5, font=dict(size=10))
         )
         return fig
@@ -190,9 +180,7 @@ if data_loaded:
         fig.update_layout(
             title=dict(text="% Sector Near 52-Wk Highs", font=dict(size=14, color="#E0E0E0")),
             template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            height=320, margin=dict(l=10, r=10, t=40, b=50), 
-            xaxis=dict(range=[0, 100], gridcolor='#222631', title=""), # Removed 'x' label
-            yaxis=dict(title="") # Removed 'y' label
+            height=320, margin=dict(l=10, r=10, t=40, b=50), xaxis=dict(range=[0, 100], gridcolor='#222631', title=""), yaxis=dict(title="")
         )
         fig.update_traces(textposition='outside', texttemplate='%{text:.1f}%', textfont_color="#FFFFFF")
         st.plotly_chart(fig, use_container_width=True)
@@ -213,7 +201,6 @@ if data_loaded:
         st.plotly_chart(plot_line_chart("% > 50 / 150 / 200 SMA", traces, breadth_ts, y_range=[0, 100]), use_container_width=True)
 
     with r2_col3:
-        # Replaced ugly Pandas table with a sleek Plotly Dark Table
         indices_list = ['^VIX', 'SPY', 'QQQ', 'DIA', 'IWM']
         idx_data = []
         for idx in indices_list:
@@ -221,26 +208,17 @@ if data_loaded:
                 p = core_matrices['Price'][idx].iloc[-1]
                 ema30 = core_matrices['EMA_30W'][idx].iloc[-1]
                 dist = ((p - ema30) / ema30) * 100
-                display_name = 'VIX' if idx == '^VIX' else idx # Fixed the VIXVIX typo
+                display_name = 'VIX' if idx == '^VIX' else idx 
                 idx_data.append({"Symbol": display_name, "Dist": dist})
                 
         df_table = pd.DataFrame(idx_data).sort_values(by="Dist", ascending=False)
-        
-        # Determine cell colors (Red for high/extended, Green for low/negative)
         cell_colors = ['#FF4560' if val > 0 else '#00E396' for val in df_table['Dist']]
         
         fig_table = go.Figure(data=[go.Table(
-            header=dict(values=["<b>Symbol</b>", "<b>% Dist from 30W EMA</b>"], 
-                        fill_color='#1E222D', align='left', font=dict(color='white', size=12), height=30),
-            cells=dict(values=[df_table['Symbol'], df_table['Dist'].apply(lambda x: f"{x:.2f}%")],
-                       fill_color=['#0E1117', cell_colors], # First col dark, second col dynamic
-                       align='left', font=dict(color='white', size=12), height=30)
+            header=dict(values=["<b>Symbol</b>", "<b>% Dist from 30W EMA</b>"], fill_color='#1E222D', align='left', font=dict(color='white', size=12), height=30),
+            cells=dict(values=[df_table['Symbol'], df_table['Dist'].apply(lambda x: f"{x:.2f}%")], fill_color=['#0E1117', cell_colors], align='left', font=dict(color='white', size=12), height=30)
         )])
-        fig_table.update_layout(
-            title=dict(text="Indices Distance from 30 WMA", font=dict(size=14, color="#E0E0E0")),
-            template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            height=320, margin=dict(l=10, r=10, t=40, b=50)
-        )
+        fig_table.update_layout(title=dict(text="Indices Distance from 30 WMA", font=dict(size=14, color="#E0E0E0")), template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", height=320, margin=dict(l=10, r=10, t=40, b=50))
         st.plotly_chart(fig_table, use_container_width=True)
 
     with r2_col4:
@@ -258,12 +236,6 @@ if data_loaded:
             template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             height=320, margin=dict(l=10, r=10, t=40, b=50),
             yaxis=dict(gridcolor='#222631', title=dict(text="% Decline", font=dict(size=10))),
-            xaxis=dict(
-                showgrid=False,
-                tickformat="%b '%y", # Show Month and Year
-                dtick="M3",
-                tickangle=-45
-            ), 
-            hovermode="x unified"
+            xaxis=dict(showgrid=False, tickformat="%b '%y", dtick="M3", tickangle=-45), hovermode="x unified"
         )
         st.plotly_chart(fig, use_container_width=True)
