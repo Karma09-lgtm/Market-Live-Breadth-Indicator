@@ -9,12 +9,19 @@ import yfinance as yf
 import concurrent.futures
 import urllib.parse
 
+# Attempt to load Generative AI (will gracefully degrade if not installed)
+try:
+    import google.generativeai as genai
+    AI_AVAILABLE = True
+except ImportError:
+    AI_AVAILABLE = False
+
 # ==========================================
 # 1. PAGE CONFIGURATION & CUSTOM CSS
 # ==========================================
 st.set_page_config(
-    page_title="Global Market Breadth",
-    page_icon="📊",
+    page_title="Global Market Breadth | AI Edition",
+    page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -26,11 +33,17 @@ st.markdown("""
         .powered-by { color: #FFFFFF; font-size: 12px; margin-top: -10px; margin-bottom: 25px; font-style: italic; opacity: 0.8;}
         .block-container { padding-top: 1.5rem; padding-bottom: 1.5rem; max-width: 96%; }
         [data-testid="column"] { padding: 0 1rem; }
-        .share-btn { display: inline-block; padding: 6px 12px; margin-bottom: 10px; font-size: 12px; font-weight: bold; line-height: 1.5; color: #fff; text-align: center; text-decoration: none; vertical-align: middle; cursor: pointer; border-radius: 4px; border: none; width: 100%;}
+        
+        /* Share Buttons */
+        .share-btn { display: inline-block; padding: 6px 12px; margin-bottom: 10px; font-size: 12px; font-weight: bold; line-height: 1.5; color: #fff; text-align: center; text-decoration: none; border-radius: 4px; border: none; width: 100%;}
         .btn-twitter { background-color: #000000; border: 1px solid #333;}
         .btn-twitter:hover { background-color: #222222; color: #fff; text-decoration: none;}
         .btn-gmail { background-color: #EA4335; }
         .btn-gmail:hover { background-color: #C5221F; color: #fff; text-decoration: none;}
+        
+        /* AI Summary Box */
+        .ai-box { background-color: #161A25; border-left: 4px solid #775DD0; padding: 20px; border-radius: 4px; margin-bottom: 30px;}
+        .ai-title { color: #775DD0; font-weight: bold; margin-bottom: 10px; font-size: 16px;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -54,7 +67,7 @@ def get_nifty500_universe():
         df['Symbol'] = df['Symbol'].astype(str) + '.NS'
         return df['Symbol'].tolist(), dict(zip(df['Symbol'], df['Industry']))
     except:
-        fallback = ['RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'ICICIBANK.NS', 'INFY.NS', 'ITC.NS', 'SBIN.NS', 'BHARTIARTL.NS']
+        fallback = ['RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ITC.NS', 'SBIN.NS']
         return fallback, {t: 'Fallback' for t in fallback}
 
 @st.cache_data(ttl=604800, show_spinner=False)
@@ -73,7 +86,6 @@ def get_market_caps(tickers, market_type="US"):
         if cap is None:
             cap_categories[ticker] = 'Unknown'
             continue
-            
         if market_type == "US":
             if cap >= 200_000_000_000: cap_categories[ticker] = 'Mega'
             elif cap >= 10_000_000_000: cap_categories[ticker] = 'Large'
@@ -83,7 +95,6 @@ def get_market_caps(tickers, market_type="US"):
             if cap >= 1_000_000_000_000: cap_categories[ticker] = 'Large' 
             elif cap >= 250_000_000_000: cap_categories[ticker] = 'Mid'   
             else: cap_categories[ticker] = 'Small'                        
-            
     return cap_categories
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -91,6 +102,10 @@ def fetch_core_market_matrix(tickers, benchmarks):
     all_tickers = list(set(tickers + benchmarks))
     prices = yf.download(all_tickers, start="2021-01-01", auto_adjust=True, progress=False)['Close'].ffill()
     
+    # Ensuring robust formatting if a single ticker is passed
+    if isinstance(prices, pd.Series):
+        prices = prices.to_frame(name=all_tickers[0])
+        
     matrices = {
         'Price': prices,
         'SMA_50': prices.rolling(window=50).mean(),
@@ -98,50 +113,62 @@ def fetch_core_market_matrix(tickers, benchmarks):
         'SMA_200': prices.rolling(window=200).mean(),
         'EMA_200': prices.ewm(span=200, adjust=False).mean(),
         'EMA_30W': prices.ewm(span=150, adjust=False).mean(),
-        'High_52W': prices.rolling(window=252).max()
+        'High_52W': prices.rolling(window=252).max(),
+        'Low_52W': prices.rolling(window=252).min() # Added for NH-NL calculation
     }
     matrices['EMA_30W_1M_Ago'] = matrices['EMA_30W'].shift(20)
     return matrices
 
 def calculate_dynamic_breadth(matrices, active_tickers, cap_categories, market_type="US"):
-    p = matrices['Price'][active_tickers]
-    ema_30w = matrices['EMA_30W'][active_tickers]
-    ema_30w_ago = matrices['EMA_30W_1M_Ago'][active_tickers]
+    # Filter only valid tickers that successfully downloaded
+    valid_tickers = [t for t in active_tickers if t in matrices['Price'].columns]
+    
+    p = matrices['Price'][valid_tickers]
+    ema_30w = matrices['EMA_30W'][valid_tickers]
+    ema_30w_ago = matrices['EMA_30W_1M_Ago'][valid_tickers]
     
     breadth = pd.DataFrame(index=p.index)
-    breadth['pct_above_50'] = (p > matrices['SMA_50'][active_tickers]).mean(axis=1) * 100
-    breadth['pct_above_150'] = (p > matrices['SMA_150'][active_tickers]).mean(axis=1) * 100
-    breadth['pct_above_200'] = (p > matrices['SMA_200'][active_tickers]).mean(axis=1) * 100
-    breadth['pct_above_200_ema'] = (p > matrices['EMA_200'][active_tickers]).mean(axis=1) * 100
+    breadth['pct_above_50'] = (p > matrices['SMA_50'][valid_tickers]).mean(axis=1) * 100
+    breadth['pct_above_150'] = (p > matrices['SMA_150'][valid_tickers]).mean(axis=1) * 100
+    breadth['pct_above_200'] = (p > matrices['SMA_200'][valid_tickers]).mean(axis=1) * 100
+    breadth['pct_above_200_ema'] = (p > matrices['EMA_200'][valid_tickers]).mean(axis=1) * 100
     breadth['pct_below_200_ema'] = 100 - breadth['pct_above_200_ema']
     breadth['stage_2'] = ((p > ema_30w) & (ema_30w > ema_30w_ago)).mean(axis=1) * 100
     breadth['stage_4'] = ((p < ema_30w) & (ema_30w < ema_30w_ago)).mean(axis=1) * 100
     
+    # Market Cap Breadth
     is_above_30w = p > ema_30w
     tiers = ['Mega', 'Large', 'Mid', 'Small'] if market_type == "US" else ['Large', 'Mid', 'Small']
     for cap_tier in tiers:
-        tier_tickers = [t for t in active_tickers if cap_categories.get(t) == cap_tier]
+        tier_tickers = [t for t in valid_tickers if cap_categories.get(t) == cap_tier]
         breadth[f'30w_{cap_tier}'] = is_above_30w[tier_tickers].mean(axis=1) * 100 if tier_tickers else 0 
+        
+    # ADVANCED QUANT: McClellan Oscillator & NH-NL
+    daily_diff = p.diff()
+    advances = (daily_diff > 0).sum(axis=1)
+    declines = (daily_diff < 0).sum(axis=1)
+    net_advances = advances - declines
+    breadth['mcclellan'] = net_advances.ewm(span=19, adjust=False).mean() - net_advances.ewm(span=39, adjust=False).mean()
+    
+    nh = (p >= matrices['High_52W'][valid_tickers]).sum(axis=1)
+    nl = (p <= matrices['Low_52W'][valid_tickers]).sum(axis=1)
+    breadth['nh_nl'] = nh - nl
             
-    latest = pd.DataFrame({'Price': p.iloc[-1], '52W_High': matrices['High_52W'][active_tickers].iloc[-1], '30W_EMA': ema_30w.iloc[-1]})
+    latest = pd.DataFrame({'Price': p.iloc[-1], '52W_High': matrices['High_52W'][valid_tickers].iloc[-1], '30W_EMA': ema_30w.iloc[-1]})
     return breadth.dropna(), latest
 
 # ==========================================
 # 3. SAFE INITIALIZATION
 # ==========================================
 try:
-    with st.spinner("Booting Global Market Engine... Fetching US & Indian matrix data (~45 secs on first run)"):
-        # US Data Setup
+    with st.spinner("Booting Quantitative Engine... Fetching US & Indian matrix data (~45 secs on first run)"):
         us_tickers, us_sectors = get_sp500_universe()
         us_caps = get_market_caps(us_tickers, "US")
-        # EXPANDED US BENCHMARKS: S&P, VIX, Nasdaq 100, Russell 2000, Dow, Tech, Financials, Healthcare, Energy
         us_benchmarks = ['^GSPC', '^VIX', 'QQQ', 'IWM', 'DIA', 'XLK', 'XLF', 'XLV', 'XLE']
         us_matrices = fetch_core_market_matrix(us_tickers, us_benchmarks)
         
-        # Indian Data Setup
         in_tickers, in_sectors = get_nifty500_universe()
         in_caps = get_market_caps(in_tickers, "IN")
-        # EXPANDED IN BENCHMARKS: Nifty 50, VIX, Bank, IT, Midcap, FMCG, Auto, Metal, Pharma
         in_benchmarks = ['^NSEI', '^INDIAVIX', '^NSEBANK', '^CNXIT', '^NSEMDCP50', '^CNXFMCG', '^CNXAUTO', '^CNXMETAL', '^CNXPHARMA']
         in_matrices = fetch_core_market_matrix(in_tickers, in_benchmarks)
         
@@ -151,7 +178,7 @@ except Exception as e:
     data_loaded = False
 
 # ==========================================
-# 4. SIDEBAR NAVIGATION & DYNAMIC VARIABLES
+# 4. SIDEBAR NAVIGATION & CUSTOM PORTFOLIO
 # ==========================================
 if data_loaded:
     st.sidebar.markdown("### 🌍 Market Selection")
@@ -170,25 +197,45 @@ if data_loaded:
         market_prefix = "Indian Market"
 
     st.sidebar.divider()
-    st.sidebar.markdown("### 🔎 Filters")
+    st.sidebar.markdown("### 🔎 Filters & Overrides")
     
-    unique_sectors = sorted(list(set(active_sectors.values())))
-    selected_sector = st.sidebar.selectbox("Filter by Sector", ["All Market"] + unique_sectors)
+    # The Custom Portfolio Override
+    custom_portfolio = st.sidebar.text_input("Custom Portfolio Override", placeholder="e.g. AAPL, TSLA, NVDA")
     
+    if custom_portfolio:
+        custom_tickers = [x.strip().upper() for x in custom_portfolio.split(',') if x.strip()]
+        with st.spinner("Analyzing Custom Portfolio..."):
+            active_matrices = fetch_core_market_matrix(custom_tickers, active_benchmarks)
+            active_caps = get_market_caps(custom_tickers, market_type)
+            active_tickers = custom_tickers
+            header_title = "Custom Portfolio Breadth"
+            selected_sector = "Custom"
+            active_sectors = {t: "Custom" for t in custom_tickers} # Dummy sectors for portfolio
+    else:
+        unique_sectors = sorted(list(set(active_sectors.values())))
+        selected_sector = st.sidebar.selectbox("Filter by Sector", ["All Market"] + unique_sectors)
+
     min_available_date = active_matrices['Price'].index[200].to_pydatetime() 
     max_available_date = active_matrices['Price'].index[-1].to_pydatetime()
     default_start_date = max(min_available_date, datetime.datetime(2022, 1, 1)) 
     
     date_range = st.sidebar.slider("Timeline Range", min_value=min_available_date, max_value=max_available_date, value=(default_start_date, max_available_date))
 
+    # --- AI MARKET SUMMARY LOGIC ---
+    st.sidebar.divider()
+    st.sidebar.markdown("### 🤖 AI Market Insights")
+    if not AI_AVAILABLE:
+        st.sidebar.warning("⚠️ google-generativeai not installed. Add it to requirements.txt to unlock AI summaries.")
+    else:
+        gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password", placeholder="Paste key here...")
+        if st.sidebar.button("Generate AI Summary"):
+            st.session_state.run_ai = True
+
     # --- SHARE BUTTONS LOGIC ---
     st.sidebar.divider()
     st.sidebar.markdown("### 📤 Share Dashboard")
-    st.sidebar.caption("Use the 'Camera' icon on any chart to download it as an image.")
-    
     app_url = "https://your-app-url.streamlit.app" 
     share_text = urllib.parse.quote(f"Check out this Live Global Market Breadth Dashboard powered by Karma Analytics! 📊📈")
-    
     x_link = f"https://twitter.com/intent/tweet?text={share_text}&url={app_url}"
     gmail_link = f"https://mail.google.com/mail/?view=cm&fs=1&su=Live Market Breadth Dashboard&body={share_text}%0A%0A{app_url}"
 
@@ -198,7 +245,7 @@ if data_loaded:
     """, unsafe_allow_html=True)
 
     # --- HEADER TITLES ---
-    if selected_sector == "All Market":
+    if selected_sector == "All Market" or selected_sector == "Custom":
         target_universe = active_tickers
         st.markdown(f"<h1>{header_title}</h1>", unsafe_allow_html=True)
     else:
@@ -206,12 +253,47 @@ if data_loaded:
         st.markdown(f"<h1>{market_prefix}: {selected_sector} Breadth</h1>", unsafe_allow_html=True)
         
     st.markdown("<div class='powered-by'>powered by Karma Analytics and Advisory Ltd.</div>", unsafe_allow_html=True)
-    st.caption(f"Live Data as of: **{max_available_date.strftime('%d %B %Y - %H:%M %p')}**")
-
+    
     # Calculate Data
     breadth_ts, latest_cross_section = calculate_dynamic_breadth(active_matrices, target_universe, active_caps, market_type)
     mask = (breadth_ts.index >= date_range[0]) & (breadth_ts.index <= date_range[1])
     breadth_ts = breadth_ts.loc[mask]
+
+    # --- AI SUMMARY EXECUTION ---
+    if getattr(st.session_state, 'run_ai', False) and gemini_api_key:
+        try:
+            genai.configure(api_key=gemini_api_key)
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            
+            # Grabbing absolute latest metrics for the prompt
+            l_200 = breadth_ts['pct_above_200'].iloc[-1]
+            l_mcclellan = breadth_ts['mcclellan'].iloc[-1]
+            l_nhnl = breadth_ts['nh_nl'].iloc[-1]
+            
+            prompt = f"""
+            You are a senior quantitative market analyst at an elite hedge fund. 
+            Analyze the following live market breadth metrics for the {header_title} and provide a concise, 3-sentence professional summary. 
+            State whether the underlying health is bullish, bearish, or mixed, and highlight any momentum divergences. Do NOT use pleasantries.
+            
+            Current Metrics:
+            - % Stocks > 200 DMA: {l_200:.1f}%
+            - McClellan Oscillator (Momentum): {l_mcclellan:.1f}
+            - Net New 52-Week Highs minus Lows: {l_nhnl:.1f}
+            """
+            
+            response = model.generate_content(prompt)
+            st.markdown(f"""
+                <div class="ai-box">
+                    <div class="ai-title">🤖 AI Quantitative Summary</div>
+                    <div>{response.text}</div>
+                </div>
+            """, unsafe_allow_html=True)
+            st.session_state.run_ai = False # Reset state after running
+        except Exception as e:
+            st.error(f"AI Generation Failed. Please check your API Key. Details: {e}")
+            st.session_state.run_ai = False
+
+    st.caption(f"Live Data as of: **{max_available_date.strftime('%d %B %Y - %H:%M %p')}**")
 
     # ==========================================
     # 5. DASHBOARD LAYOUT & PRO CHARTS
@@ -234,68 +316,51 @@ if data_loaded:
 
     # --- ROW 1 (Macro Trends) ---
     r1_col1, r1_col2 = st.columns(2)
-
     with r1_col1:
         if market_type == "US":
             traces = [("Mega", '30w_Mega', "#00E396"), ("Large", '30w_Large', "#008FFB"), ("Mid", '30w_Mid', "#FEB019"), ("Small", '30w_Small', "#FF4560")]
         else:
             traces = [("Large", '30w_Large', "#008FFB"), ("Mid", '30w_Mid', "#FEB019"), ("Small", '30w_Small', "#FF4560")]
         st.plotly_chart(plot_line_chart("% > 30W EMA by Cap", traces, breadth_ts), use_container_width=True)
-
     with r1_col2:
-        traces = [("Stage 2 (Bull)", 'stage_2', "#00E396"), ("Stage 4 (Bear)", 'stage_4', "#FF4560")]
-        st.plotly_chart(plot_line_chart("Weinstein Stage Analysis", traces, breadth_ts), use_container_width=True)
+        st.plotly_chart(plot_line_chart("Weinstein Stage Analysis", [("Stage 2 (Bull)", 'stage_2', "#00E396"), ("Stage 4 (Bear)", 'stage_4', "#FF4560")], breadth_ts), use_container_width=True)
 
     # --- ROW 2 (Moving Averages) ---
     st.write("") 
     r2_col1, r2_col2 = st.columns(2)
-
     with r2_col1:
-        traces = [("> 200 DMA", 'pct_above_200', "#775DD0"), (("> 150 DMA", 'pct_above_150', "#008FFB")), ("> 50 DMA", 'pct_above_50', "#00E396")]
-        st.plotly_chart(plot_line_chart("% > 50 / 150 / 200 SMA", traces, breadth_ts, y_range=[0, 100]), use_container_width=True)
-
+        st.plotly_chart(plot_line_chart("% > 50 / 150 / 200 SMA", [("> 200 DMA", 'pct_above_200', "#775DD0"), (("> 150 DMA", 'pct_above_150', "#008FFB")), ("> 50 DMA", 'pct_above_50', "#00E396")], breadth_ts, y_range=[0, 100]), use_container_width=True)
     with r2_col2:
-        traces = [("% Above", 'pct_above_200_ema', "#00E396"), ("% Below", 'pct_below_200_ema', "#FF4560")]
-        st.plotly_chart(plot_line_chart("% Stocks > / < 200 EMA", traces, breadth_ts, hline=50), use_container_width=True)
+        st.plotly_chart(plot_line_chart("% Stocks > / < 200 EMA", [("% Above", 'pct_above_200_ema', "#00E396"), ("% Below", 'pct_below_200_ema', "#FF4560")], breadth_ts, hline=50), use_container_width=True)
 
     # --- ROW 3 (Broad Breadth & Drawdowns) ---
     st.write("")
     r3_col1, r3_col2 = st.columns(2)
-
     with r3_col1:
         st.plotly_chart(plot_line_chart("% Stocks > 200 DMA", [("% > 200 DMA", 'pct_above_200', "#008FFB")], breadth_ts, y_range=[0, 100], hline=50), use_container_width=True)
-
     with r3_col2:
-        idx_price = active_matrices['Price'][main_index]
+        idx_price = active_matrices['Price'][main_index] if main_index in active_matrices['Price'].columns else active_matrices['Price'].iloc[:,0]
         drawdown_pct = ((idx_price - idx_price.cummax()) / idx_price.cummax()) * 100 
         drawdown_abs = drawdown_pct.abs()
         drawdown_filtered = drawdown_abs.loc[(drawdown_abs.index >= date_range[0]) & (drawdown_abs.index <= date_range[1])]
-        
         fig = go.Figure(data=[go.Bar(x=drawdown_filtered.index, y=drawdown_filtered, marker_color="#FF4560")])
-        fig.update_layout(
-            title=dict(text=f"Peak Drawdowns ({main_index.replace('^','')})", font=dict(size=16, color="#E0E0E0"), y=0.95), 
-            template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", height=380, margin=dict(l=10, r=20, t=50, b=50), 
-            yaxis=dict(gridcolor='#222631', title=dict(text="% Decline", font=dict(size=12))), 
-            xaxis=dict(showgrid=False, tickformat="%b '%y", nticks=10, tickangle=0), hovermode="x unified"
-        )
+        fig.update_layout(title=dict(text=f"Peak Drawdowns ({main_index.replace('^','')})", font=dict(size=16, color="#E0E0E0"), y=0.95), template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", height=380, margin=dict(l=10, r=20, t=50, b=50), yaxis=dict(gridcolor='#222631', title=dict(text="% Decline", font=dict(size=12))), xaxis=dict(showgrid=False, tickformat="%b '%y", nticks=10, tickangle=0), hovermode="x unified")
         st.plotly_chart(fig, use_container_width=True)
 
     # --- ROW 4 (Sector Bar & Expanded Table) ---
     st.write("")
     r4_col1, r4_col2 = st.columns(2)
-
     with r4_col1:
-        latest_cross_section['Near_High'] = latest_cross_section['Price'] >= (latest_cross_section['52W_High'] * 0.97)
-        sector_highs = latest_cross_section.groupby(latest_cross_section.index.map(active_sectors))['Near_High'].mean() * 100
-        sector_highs = sector_highs.sort_values(ascending=True)
-        fig = px.bar(x=sector_highs.values, y=sector_highs.index, orientation='h', text=sector_highs.values, color_discrete_sequence=["#008FFB"])
-        fig.update_layout(
-            title=dict(text="% Sector Near 52-Wk Highs", font=dict(size=16, color="#E0E0E0"), y=0.95), 
-            template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", height=380, margin=dict(l=10, r=20, t=50, b=50), 
-            xaxis=dict(range=[0, 100], gridcolor='#222631', title=""), yaxis=dict(title="", automargin=True)
-        )
-        fig.update_traces(textposition='outside', texttemplate='%{text:.1f}%', textfont_color="#FFFFFF")
-        st.plotly_chart(fig, use_container_width=True)
+        if selected_sector != "Custom":
+            latest_cross_section['Near_High'] = latest_cross_section['Price'] >= (latest_cross_section['52W_High'] * 0.97)
+            sector_highs = latest_cross_section.groupby(latest_cross_section.index.map(active_sectors))['Near_High'].mean() * 100
+            sector_highs = sector_highs.sort_values(ascending=True)
+            fig = px.bar(x=sector_highs.values, y=sector_highs.index, orientation='h', text=sector_highs.values, color_discrete_sequence=["#008FFB"])
+            fig.update_layout(title=dict(text="% Sector Near 52-Wk Highs", font=dict(size=16, color="#E0E0E0"), y=0.95), template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", height=380, margin=dict(l=10, r=20, t=50, b=50), xaxis=dict(range=[0, 100], gridcolor='#222631', title=""), yaxis=dict(title="", automargin=True))
+            fig.update_traces(textposition='outside', texttemplate='%{text:.1f}%', textfont_color="#FFFFFF")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Sector breakdown disabled for Custom Portfolios.")
 
     with r4_col2:
         idx_data = []
@@ -304,19 +369,39 @@ if data_loaded:
                 p = active_matrices['Price'][idx].iloc[-1]
                 ema30 = active_matrices['EMA_30W'][idx].iloc[-1]
                 dist = ((p - ema30) / ema30) * 100
-                display_name = idx.replace('^', '') 
-                idx_data.append({"Symbol": display_name, "Dist": dist})
-                
+                idx_data.append({"Symbol": idx.replace('^', ''), "Dist": dist})
         df_table = pd.DataFrame(idx_data).sort_values(by="Dist", ascending=False)
         cell_colors = ['#FF4560' if val > 0 else '#00E396' for val in df_table['Dist']]
-        
-        # We increase the table height to accommodate the expanded list of indices
         fig_table = go.Figure(data=[go.Table(
             header=dict(values=["<b>Symbol (Index/ETF)</b>", "<b>% Dist from 30W EMA</b>"], fill_color='#1E222D', align='left', font=dict(color='white', size=14), height=40),
             cells=dict(values=[df_table['Symbol'], df_table['Dist'].apply(lambda x: f"{x:.2f}%")], fill_color=['#0E1117', cell_colors], align='left', font=dict(color='white', size=13), height=35)
         )])
-        fig_table.update_layout(
-            title=dict(text="Indices Distance from 30 WMA", font=dict(size=16, color="#E0E0E0"), y=0.95), 
-            template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", height=380, margin=dict(l=10, r=20, t=50, b=50)
-        )
+        fig_table.update_layout(title=dict(text="Indices Distance from 30 WMA", font=dict(size=16, color="#E0E0E0"), y=0.95), template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", height=380, margin=dict(l=10, r=20, t=50, b=50))
         st.plotly_chart(fig_table, use_container_width=True)
+
+    # --- ROW 5 (ADVANCED QUANTITATIVE INDICATORS) ---
+    st.write("")
+    st.markdown("### 🔬 Advanced Quantitative Indicators")
+    r5_col1, r5_col2 = st.columns(2)
+    
+    with r5_col1:
+        # McClellan Oscillator (Bar Chart oscillating around 0)
+        colors = ['#00E396' if val > 0 else '#FF4560' for val in breadth_ts['mcclellan']]
+        fig_mc = go.Figure(data=[go.Bar(x=breadth_ts.index, y=breadth_ts['mcclellan'], marker_color=colors)])
+        fig_mc.update_layout(
+            title=dict(text="McClellan Oscillator (Momentum Breadth)", font=dict(size=16, color="#E0E0E0"), y=0.95), 
+            template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", height=380, margin=dict(l=10, r=20, t=50, b=50), 
+            yaxis=dict(gridcolor='#222631'), xaxis=dict(showgrid=False, tickformat="%b '%y", nticks=10, tickangle=0), hovermode="x unified"
+        )
+        st.plotly_chart(fig_mc, use_container_width=True)
+
+    with r5_col2:
+        # Net New Highs - New Lows
+        colors_nhnl = ['#008FFB' if val > 0 else '#FF4560' for val in breadth_ts['nh_nl']]
+        fig_nhnl = go.Figure(data=[go.Bar(x=breadth_ts.index, y=breadth_ts['nh_nl'], marker_color=colors_nhnl)])
+        fig_nhnl.update_layout(
+            title=dict(text="Net New 52-Week Highs/Lows", font=dict(size=16, color="#E0E0E0"), y=0.95), 
+            template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", height=380, margin=dict(l=10, r=20, t=50, b=50), 
+            yaxis=dict(gridcolor='#222631'), xaxis=dict(showgrid=False, tickformat="%b '%y", nticks=10, tickangle=0), hovermode="x unified"
+        )
+        st.plotly_chart(fig_nhnl, use_container_width=True)
