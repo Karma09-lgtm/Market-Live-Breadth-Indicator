@@ -14,7 +14,7 @@ import urllib.parse
 # ==========================================
 st.set_page_config(
     page_title="Global Market Breadth",
-    page_icon="🌍",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -150,20 +150,24 @@ except Exception as e:
 # 4. SIDEBAR NAVIGATION & DYNAMIC VARIABLES
 # ==========================================
 if data_loaded:
-    st.sidebar.markdown("### 🌍 Market Selection")
-    selected_market = st.sidebar.radio("Choose Market", ["🇺🇸 US Market (S&P 500)", "🇮🇳 Indian Market (Nifty 500)"])
+    st.sidebar.markdown("### ⚙️ Market Selection")
     
-    if selected_market == "🇺🇸 US Market (S&P 500)":
+    # Removed flags to prevent Windows rendering issues
+    selected_market = st.sidebar.radio("Choose Market", ["US Market (S&P 500)", "Indian Market (Nifty 500)"])
+    
+    if selected_market == "US Market (S&P 500)":
         market_type = "US"
         active_tickers, active_sectors, active_caps, active_matrices, active_benchmarks, main_index = us_tickers, us_sectors, us_caps, us_matrices, us_benchmarks, "^GSPC"
-        header_title = "🇺🇸 US Market Breadth (S&P 500)"
+        header_title = "US Market Breadth (S&P 500)"
+        market_prefix = "US Market"
     else:
         market_type = "IN"
         active_tickers, active_sectors, active_caps, active_matrices, active_benchmarks, main_index = in_tickers, in_sectors, in_caps, in_matrices, in_benchmarks, "^NSEI"
-        header_title = "🇮🇳 Indian Market Breadth (Nifty 500)"
+        header_title = "Indian Market Breadth (Nifty 500)"
+        market_prefix = "Indian Market"
 
     st.sidebar.divider()
-    st.sidebar.markdown("### ⚙️ Filters")
+    st.sidebar.markdown("### 🔎 Filters")
     
     unique_sectors = sorted(list(set(active_sectors.values())))
     selected_sector = st.sidebar.selectbox("Filter by Sector", ["All Market"] + unique_sectors)
@@ -191,13 +195,13 @@ if data_loaded:
         <a href="{gmail_link}" target="_blank" class="share-btn btn-gmail">✉️ Share via Gmail</a>
     """, unsafe_allow_html=True)
 
-    # --- HEADER TITLES ---
+    # --- HEADER TITLES (Fixed) ---
     if selected_sector == "All Market":
         target_universe = active_tickers
         st.markdown(f"<h1>{header_title}</h1>", unsafe_allow_html=True)
     else:
         target_universe = [t for t, s in active_sectors.items() if s == selected_sector]
-        st.markdown(f"<h1>{header_title.split(' ')[0]} {selected_sector} Breadth</h1>", unsafe_allow_html=True)
+        st.markdown(f"<h1>{market_prefix}: {selected_sector} Breadth</h1>", unsafe_allow_html=True)
         
     st.markdown("<div class='powered-by'>powered by Karma Analytics and Advisory Ltd.</div>", unsafe_allow_html=True)
     st.caption(f"Live Data as of: **{max_available_date.strftime('%d %B %Y - %H:%M %p')}**")
