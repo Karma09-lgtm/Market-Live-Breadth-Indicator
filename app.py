@@ -23,9 +23,9 @@ st.markdown("""
     <style>
         .stApp { background-color: #0E1117; color: #FFFFFF; }
         h1 { color: #00E396; font-weight: 600; font-family: 'Inter', sans-serif; font-size: 2rem; margin-bottom: 0px; padding-bottom: 0px;}
-        .powered-by { color: #FFFFFF; font-size: 12px; margin-top: -10px; margin-bottom: 20px; font-style: italic; opacity: 0.8;}
-        .block-container { padding-top: 1rem; padding-bottom: 1rem; max-width: 98%; }
-        [data-testid="column"] { padding: 0 0.5rem; }
+        .powered-by { color: #FFFFFF; font-size: 12px; margin-top: -10px; margin-bottom: 25px; font-style: italic; opacity: 0.8;}
+        .block-container { padding-top: 1.5rem; padding-bottom: 1.5rem; max-width: 96%; }
+        [data-testid="column"] { padding: 0 1rem; } /* Increased padding between columns */
         .share-btn { display: inline-block; padding: 6px 12px; margin-bottom: 10px; font-size: 12px; font-weight: bold; line-height: 1.5; color: #fff; text-align: center; text-decoration: none; vertical-align: middle; cursor: pointer; border-radius: 4px; border: none; width: 100%;}
         .btn-twitter { background-color: #000000; border: 1px solid #333;}
         .btn-twitter:hover { background-color: #222222; color: #fff; text-decoration: none;}
@@ -150,9 +150,8 @@ except Exception as e:
 # 4. SIDEBAR NAVIGATION & DYNAMIC VARIABLES
 # ==========================================
 if data_loaded:
-    st.sidebar.markdown("### ⚙️ Market Selection")
+    st.sidebar.markdown("### 🌍 Market Selection")
     
-    # Removed flags to prevent Windows rendering issues
     selected_market = st.sidebar.radio("Choose Market", ["US Market (S&P 500)", "Indian Market (Nifty 500)"])
     
     if selected_market == "US Market (S&P 500)":
@@ -183,7 +182,6 @@ if data_loaded:
     st.sidebar.markdown("### 📤 Share Dashboard")
     st.sidebar.caption("Use the 'Camera' icon on any chart to download it as an image.")
     
-    # Replace this with your actual deployed Streamlit URL once you have it
     app_url = "https://your-app-url.streamlit.app" 
     share_text = urllib.parse.quote(f"Check out this Live Global Market Breadth Dashboard powered by Karma Analytics! 📊📈")
     
@@ -195,7 +193,7 @@ if data_loaded:
         <a href="{gmail_link}" target="_blank" class="share-btn btn-gmail">✉️ Share via Gmail</a>
     """, unsafe_allow_html=True)
 
-    # --- HEADER TITLES (Fixed) ---
+    # --- HEADER TITLES ---
     if selected_sector == "All Market":
         target_universe = active_tickers
         st.markdown(f"<h1>{header_title}</h1>", unsafe_allow_html=True)
@@ -212,26 +210,30 @@ if data_loaded:
     breadth_ts = breadth_ts.loc[mask]
 
     # ==========================================
-    # 5. DASHBOARD LAYOUT & PRO CHARTS
+    # 5. DASHBOARD LAYOUT (Upgraded to 2-Column Grid)
     # ==========================================
     def plot_line_chart(title, traces_dict, df_timeseries, y_range=[0, 100], hline=None):
         fig = go.Figure()
         for name, col_name, color in traces_dict:
             if df_timeseries[col_name].sum() > 0:
-                fig.add_trace(go.Scatter(x=df_timeseries.index, y=df_timeseries[col_name], mode='lines', name=name, line=dict(width=1.5, color=color)))
+                # Reduced line width to 1.2 to prevent bleed in tight clusters
+                fig.add_trace(go.Scatter(x=df_timeseries.index, y=df_timeseries[col_name], mode='lines', name=name, line=dict(width=1.2, color=color)))
         if hline:
             fig.add_hline(y=hline, line_dash="dash", line_color="rgba(255,255,255,0.2)", line_width=1.5)
             
         fig.update_layout(
-            title=dict(text=title, font=dict(size=14, color="#E0E0E0"), y=0.95), template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            height=320, margin=dict(l=10, r=10, t=40, b=50), yaxis=dict(range=y_range, gridcolor='#222631', zerolinecolor='#222631'),
-            xaxis=dict(gridcolor='#222631', zerolinecolor='#222631', showgrid=False, tickformat="%b '%y", dtick="M3", tickangle=-45),
-            hovermode="x unified", legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="center", x=0.5, font=dict(size=10))
+            title=dict(text=title, font=dict(size=16, color="#E0E0E0"), y=0.95), template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            height=380, # Increased height from 320 to 380 for better readability
+            margin=dict(l=10, r=20, t=50, b=50), 
+            yaxis=dict(range=y_range, gridcolor='#222631', zerolinecolor='#222631'),
+            # Auto-scaling X-Axis with max 10 ticks so it never overlaps
+            xaxis=dict(gridcolor='#222631', zerolinecolor='#222631', showgrid=False, tickformat="%b '%y", nticks=10, tickangle=0),
+            hovermode="x unified", legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="center", x=0.5, font=dict(size=12))
         )
         return fig
 
-    # --- ROW 1 ---
-    r1_col1, r1_col2, r1_col3, r1_col4 = st.columns(4)
+    # --- ROW 1 (Macro Trends) ---
+    r1_col1, r1_col2 = st.columns(2)
 
     with r1_col1:
         if market_type == "US":
@@ -244,30 +246,58 @@ if data_loaded:
         traces = [("Stage 2 (Bull)", 'stage_2', "#00E396"), ("Stage 4 (Bear)", 'stage_4', "#FF4560")]
         st.plotly_chart(plot_line_chart("Weinstein Stage Analysis", traces, breadth_ts), use_container_width=True)
 
-    with r1_col3:
+    # --- ROW 2 (Moving Averages) ---
+    st.write("") # Add spacing between rows
+    r2_col1, r2_col2 = st.columns(2)
+
+    with r2_col1:
+        traces = [("> 200 DMA", 'pct_above_200', "#775DD0"), (("> 150 DMA", 'pct_above_150', "#008FFB")), ("> 50 DMA", 'pct_above_50', "#00E396")]
+        st.plotly_chart(plot_line_chart("% > 50 / 150 / 200 SMA", traces, breadth_ts, y_range=[0, 100]), use_container_width=True)
+
+    with r2_col2:
+        traces = [("% Above", 'pct_above_200_ema', "#00E396"), ("% Below", 'pct_below_200_ema', "#FF4560")]
+        st.plotly_chart(plot_line_chart("% Stocks > / < 200 EMA", traces, breadth_ts, hline=50), use_container_width=True)
+
+    # --- ROW 3 (Broad Breadth & Drawdowns) ---
+    st.write("")
+    r3_col1, r3_col2 = st.columns(2)
+
+    with r3_col1:
+        st.plotly_chart(plot_line_chart("% Stocks > 200 DMA", [("% > 200 DMA", 'pct_above_200', "#008FFB")], breadth_ts, y_range=[0, 100], hline=50), use_container_width=True)
+
+    with r3_col2:
+        idx_price = active_matrices['Price'][main_index]
+        drawdown_pct = ((idx_price - idx_price.cummax()) / idx_price.cummax()) * 100 
+        drawdown_abs = drawdown_pct.abs()
+        drawdown_filtered = drawdown_abs.loc[(drawdown_abs.index >= date_range[0]) & (drawdown_abs.index <= date_range[1])]
+        
+        fig = go.Figure(data=[go.Bar(x=drawdown_filtered.index, y=drawdown_filtered, marker_color="#FF4560")])
+        fig.update_layout(
+            title=dict(text=f"Peak Drawdowns ({main_index.replace('^','')})", font=dict(size=16, color="#E0E0E0"), y=0.95), 
+            template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", height=380, margin=dict(l=10, r=20, t=50, b=50), 
+            yaxis=dict(gridcolor='#222631', title=dict(text="% Decline", font=dict(size=12))), 
+            xaxis=dict(showgrid=False, tickformat="%b '%y", nticks=10, tickangle=0), hovermode="x unified"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    # --- ROW 4 (Sector Bar & Table) ---
+    st.write("")
+    r4_col1, r4_col2 = st.columns(2)
+
+    with r4_col1:
         latest_cross_section['Near_High'] = latest_cross_section['Price'] >= (latest_cross_section['52W_High'] * 0.97)
         sector_highs = latest_cross_section.groupby(latest_cross_section.index.map(active_sectors))['Near_High'].mean() * 100
         sector_highs = sector_highs.sort_values(ascending=True)
         fig = px.bar(x=sector_highs.values, y=sector_highs.index, orientation='h', text=sector_highs.values, color_discrete_sequence=["#008FFB"])
-        fig.update_layout(title=dict(text="% Sector Near 52-Wk Highs", font=dict(size=14, color="#E0E0E0")), template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", height=320, margin=dict(l=10, r=10, t=40, b=50), xaxis=dict(range=[0, 100], gridcolor='#222631', title=""), yaxis=dict(title=""))
+        fig.update_layout(
+            title=dict(text="% Sector Near 52-Wk Highs", font=dict(size=16, color="#E0E0E0"), y=0.95), 
+            template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", height=380, margin=dict(l=10, r=20, t=50, b=50), 
+            xaxis=dict(range=[0, 100], gridcolor='#222631', title=""), yaxis=dict(title="", automargin=True)
+        )
         fig.update_traces(textposition='outside', texttemplate='%{text:.1f}%', textfont_color="#FFFFFF")
         st.plotly_chart(fig, use_container_width=True)
 
-    with r1_col4:
-        traces = [("% Above", 'pct_above_200_ema', "#00E396"), ("% Below", 'pct_below_200_ema', "#FF4560")]
-        st.plotly_chart(plot_line_chart("% Stocks > / < 200 EMA", traces, breadth_ts, hline=50), use_container_width=True)
-
-    # --- ROW 2 ---
-    r2_col1, r2_col2, r2_col3, r2_col4 = st.columns(4)
-
-    with r2_col1:
-        st.plotly_chart(plot_line_chart("% Stocks > 200 DMA", [("% > 200 DMA", 'pct_above_200', "#008FFB")], breadth_ts, y_range=[0, 100], hline=50), use_container_width=True)
-
-    with r2_col2:
-        traces = [("> 200 DMA", 'pct_above_200', "#775DD0"), (("> 150 DMA", 'pct_above_150', "#008FFB")), ("> 50 DMA", 'pct_above_50', "#00E396")]
-        st.plotly_chart(plot_line_chart("% > 50 / 150 / 200 SMA", traces, breadth_ts, y_range=[0, 100]), use_container_width=True)
-
-    with r2_col3:
+    with r4_col2:
         idx_data = []
         for idx in active_benchmarks:
             if idx in active_matrices['Price'].columns:
@@ -281,18 +311,11 @@ if data_loaded:
         cell_colors = ['#FF4560' if val > 0 else '#00E396' for val in df_table['Dist']]
         
         fig_table = go.Figure(data=[go.Table(
-            header=dict(values=["<b>Symbol</b>", "<b>% Dist from 30W EMA</b>"], fill_color='#1E222D', align='left', font=dict(color='white', size=12), height=30),
-            cells=dict(values=[df_table['Symbol'], df_table['Dist'].apply(lambda x: f"{x:.2f}%")], fill_color=['#0E1117', cell_colors], align='left', font=dict(color='white', size=12), height=30)
+            header=dict(values=["<b>Symbol</b>", "<b>% Dist from 30W EMA</b>"], fill_color='#1E222D', align='left', font=dict(color='white', size=14), height=40),
+            cells=dict(values=[df_table['Symbol'], df_table['Dist'].apply(lambda x: f"{x:.2f}%")], fill_color=['#0E1117', cell_colors], align='left', font=dict(color='white', size=13), height=40)
         )])
-        fig_table.update_layout(title=dict(text="Indices Distance from 30 WMA", font=dict(size=14, color="#E0E0E0")), template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", height=320, margin=dict(l=10, r=10, t=40, b=50))
+        fig_table.update_layout(
+            title=dict(text="Indices Distance from 30 WMA", font=dict(size=16, color="#E0E0E0"), y=0.95), 
+            template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", height=380, margin=dict(l=10, r=20, t=50, b=50)
+        )
         st.plotly_chart(fig_table, use_container_width=True)
-
-    with r2_col4:
-        idx_price = active_matrices['Price'][main_index]
-        drawdown_pct = ((idx_price - idx_price.cummax()) / idx_price.cummax()) * 100 
-        drawdown_abs = drawdown_pct.abs()
-        drawdown_filtered = drawdown_abs.loc[(drawdown_abs.index >= date_range[0]) & (drawdown_abs.index <= date_range[1])]
-        
-        fig = go.Figure(data=[go.Bar(x=drawdown_filtered.index, y=drawdown_filtered, marker_color="#FF4560")])
-        fig.update_layout(title=dict(text=f"Peak Drawdowns ({main_index.replace('^','')})", font=dict(size=14, color="#E0E0E0")), template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", height=320, margin=dict(l=10, r=10, t=40, b=50), yaxis=dict(gridcolor='#222631', title=dict(text="% Decline", font=dict(size=10))), xaxis=dict(showgrid=False, tickformat="%b '%y", dtick="M3", tickangle=-45), hovermode="x unified")
-        st.plotly_chart(fig, use_container_width=True)
