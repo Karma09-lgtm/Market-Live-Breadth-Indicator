@@ -25,7 +25,7 @@ st.markdown("""
         h1 { color: #00E396; font-weight: 600; font-family: 'Inter', sans-serif; font-size: 2rem; margin-bottom: 0px; padding-bottom: 0px;}
         .powered-by { color: #FFFFFF; font-size: 12px; margin-top: -10px; margin-bottom: 25px; font-style: italic; opacity: 0.8;}
         .block-container { padding-top: 1.5rem; padding-bottom: 1.5rem; max-width: 96%; }
-        [data-testid="column"] { padding: 0 1rem; } /* Increased padding between columns */
+        [data-testid="column"] { padding: 0 1rem; }
         .share-btn { display: inline-block; padding: 6px 12px; margin-bottom: 10px; font-size: 12px; font-weight: bold; line-height: 1.5; color: #fff; text-align: center; text-decoration: none; vertical-align: middle; cursor: pointer; border-radius: 4px; border: none; width: 100%;}
         .btn-twitter { background-color: #000000; border: 1px solid #333;}
         .btn-twitter:hover { background-color: #222222; color: #fff; text-decoration: none;}
@@ -131,14 +131,18 @@ def calculate_dynamic_breadth(matrices, active_tickers, cap_categories, market_t
 # ==========================================
 try:
     with st.spinner("Booting Global Market Engine... Fetching US & Indian matrix data (~45 secs on first run)"):
+        # US Data Setup
         us_tickers, us_sectors = get_sp500_universe()
         us_caps = get_market_caps(us_tickers, "US")
-        us_benchmarks = ['^GSPC', '^VIX', 'SPY', 'QQQ', 'DIA', 'IWM']
+        # EXPANDED US BENCHMARKS: S&P, VIX, Nasdaq 100, Russell 2000, Dow, Tech, Financials, Healthcare, Energy
+        us_benchmarks = ['^GSPC', '^VIX', 'QQQ', 'IWM', 'DIA', 'XLK', 'XLF', 'XLV', 'XLE']
         us_matrices = fetch_core_market_matrix(us_tickers, us_benchmarks)
         
+        # Indian Data Setup
         in_tickers, in_sectors = get_nifty500_universe()
         in_caps = get_market_caps(in_tickers, "IN")
-        in_benchmarks = ['^NSEI', '^INDIAVIX', '^NSEBANK', '^CNXIT', '^NSEMDCP50']
+        # EXPANDED IN BENCHMARKS: Nifty 50, VIX, Bank, IT, Midcap, FMCG, Auto, Metal, Pharma
+        in_benchmarks = ['^NSEI', '^INDIAVIX', '^NSEBANK', '^CNXIT', '^NSEMDCP50', '^CNXFMCG', '^CNXAUTO', '^CNXMETAL', '^CNXPHARMA']
         in_matrices = fetch_core_market_matrix(in_tickers, in_benchmarks)
         
     data_loaded = True
@@ -210,23 +214,19 @@ if data_loaded:
     breadth_ts = breadth_ts.loc[mask]
 
     # ==========================================
-    # 5. DASHBOARD LAYOUT (Upgraded to 2-Column Grid)
+    # 5. DASHBOARD LAYOUT & PRO CHARTS
     # ==========================================
     def plot_line_chart(title, traces_dict, df_timeseries, y_range=[0, 100], hline=None):
         fig = go.Figure()
         for name, col_name, color in traces_dict:
             if df_timeseries[col_name].sum() > 0:
-                # Reduced line width to 1.2 to prevent bleed in tight clusters
                 fig.add_trace(go.Scatter(x=df_timeseries.index, y=df_timeseries[col_name], mode='lines', name=name, line=dict(width=1.2, color=color)))
         if hline:
             fig.add_hline(y=hline, line_dash="dash", line_color="rgba(255,255,255,0.2)", line_width=1.5)
             
         fig.update_layout(
             title=dict(text=title, font=dict(size=16, color="#E0E0E0"), y=0.95), template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            height=380, # Increased height from 320 to 380 for better readability
-            margin=dict(l=10, r=20, t=50, b=50), 
-            yaxis=dict(range=y_range, gridcolor='#222631', zerolinecolor='#222631'),
-            # Auto-scaling X-Axis with max 10 ticks so it never overlaps
+            height=380, margin=dict(l=10, r=20, t=50, b=50), yaxis=dict(range=y_range, gridcolor='#222631', zerolinecolor='#222631'),
             xaxis=dict(gridcolor='#222631', zerolinecolor='#222631', showgrid=False, tickformat="%b '%y", nticks=10, tickangle=0),
             hovermode="x unified", legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="center", x=0.5, font=dict(size=12))
         )
@@ -247,7 +247,7 @@ if data_loaded:
         st.plotly_chart(plot_line_chart("Weinstein Stage Analysis", traces, breadth_ts), use_container_width=True)
 
     # --- ROW 2 (Moving Averages) ---
-    st.write("") # Add spacing between rows
+    st.write("") 
     r2_col1, r2_col2 = st.columns(2)
 
     with r2_col1:
@@ -280,7 +280,7 @@ if data_loaded:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    # --- ROW 4 (Sector Bar & Table) ---
+    # --- ROW 4 (Sector Bar & Expanded Table) ---
     st.write("")
     r4_col1, r4_col2 = st.columns(2)
 
@@ -310,9 +310,10 @@ if data_loaded:
         df_table = pd.DataFrame(idx_data).sort_values(by="Dist", ascending=False)
         cell_colors = ['#FF4560' if val > 0 else '#00E396' for val in df_table['Dist']]
         
+        # We increase the table height to accommodate the expanded list of indices
         fig_table = go.Figure(data=[go.Table(
-            header=dict(values=["<b>Symbol</b>", "<b>% Dist from 30W EMA</b>"], fill_color='#1E222D', align='left', font=dict(color='white', size=14), height=40),
-            cells=dict(values=[df_table['Symbol'], df_table['Dist'].apply(lambda x: f"{x:.2f}%")], fill_color=['#0E1117', cell_colors], align='left', font=dict(color='white', size=13), height=40)
+            header=dict(values=["<b>Symbol (Index/ETF)</b>", "<b>% Dist from 30W EMA</b>"], fill_color='#1E222D', align='left', font=dict(color='white', size=14), height=40),
+            cells=dict(values=[df_table['Symbol'], df_table['Dist'].apply(lambda x: f"{x:.2f}%")], fill_color=['#0E1117', cell_colors], align='left', font=dict(color='white', size=13), height=35)
         )])
         fig_table.update_layout(
             title=dict(text="Indices Distance from 30 WMA", font=dict(size=16, color="#E0E0E0"), y=0.95), 
