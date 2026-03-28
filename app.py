@@ -7,6 +7,7 @@ import datetime
 import requests
 import yfinance as yf
 import concurrent.futures
+import urllib.parse
 
 # ==========================================
 # 1. PAGE CONFIGURATION & CUSTOM CSS
@@ -15,15 +16,21 @@ st.set_page_config(
     page_title="Global Market Breadth",
     page_icon="🌍",
     layout="wide",
-    initial_sidebar_state="expanded" # Keep sidebar open for easy toggling
+    initial_sidebar_state="expanded"
 )
 
 st.markdown("""
     <style>
         .stApp { background-color: #0E1117; color: #FFFFFF; }
-        h1 { color: #00E396; font-weight: 600; font-family: 'Inter', sans-serif; font-size: 2rem; margin-bottom: 0;}
+        h1 { color: #00E396; font-weight: 600; font-family: 'Inter', sans-serif; font-size: 2rem; margin-bottom: 0px; padding-bottom: 0px;}
+        .powered-by { color: #FFFFFF; font-size: 12px; margin-top: -10px; margin-bottom: 20px; font-style: italic; opacity: 0.8;}
         .block-container { padding-top: 1rem; padding-bottom: 1rem; max-width: 98%; }
         [data-testid="column"] { padding: 0 0.5rem; }
+        .share-btn { display: inline-block; padding: 6px 12px; margin-bottom: 10px; font-size: 12px; font-weight: bold; line-height: 1.5; color: #fff; text-align: center; text-decoration: none; vertical-align: middle; cursor: pointer; border-radius: 4px; border: none; width: 100%;}
+        .btn-twitter { background-color: #000000; border: 1px solid #333;}
+        .btn-twitter:hover { background-color: #222222; color: #fff; text-decoration: none;}
+        .btn-gmail { background-color: #EA4335; }
+        .btn-gmail:hover { background-color: #C5221F; color: #fff; text-decoration: none;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -50,7 +57,6 @@ def get_nifty500_universe():
         fallback = ['RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'ICICIBANK.NS', 'INFY.NS', 'ITC.NS', 'SBIN.NS', 'BHARTIARTL.NS']
         return fallback, {t: 'Fallback' for t in fallback}
 
-# FAST Multithreaded Market Cap Fetcher
 @st.cache_data(ttl=604800, show_spinner=False)
 def get_market_caps(tickers, market_type="US"):
     caps, cap_categories = {}, {}
@@ -83,7 +89,6 @@ def get_market_caps(tickers, market_type="US"):
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_core_market_matrix(tickers, benchmarks):
     all_tickers = list(set(tickers + benchmarks))
-    # Fetch from 2021 to ensure MAs are fully "warmed up" by Jan 2022
     prices = yf.download(all_tickers, start="2021-01-01", auto_adjust=True, progress=False)['Close'].ffill()
     
     matrices = {
@@ -126,13 +131,11 @@ def calculate_dynamic_breadth(matrices, active_tickers, cap_categories, market_t
 # ==========================================
 try:
     with st.spinner("Booting Global Market Engine... Fetching US & Indian matrix data (~45 secs on first run)"):
-        # US Data
         us_tickers, us_sectors = get_sp500_universe()
         us_caps = get_market_caps(us_tickers, "US")
         us_benchmarks = ['^GSPC', '^VIX', 'SPY', 'QQQ', 'DIA', 'IWM']
         us_matrices = fetch_core_market_matrix(us_tickers, us_benchmarks)
         
-        # India Data
         in_tickers, in_sectors = get_nifty500_universe()
         in_caps = get_market_caps(in_tickers, "IN")
         in_benchmarks = ['^NSEI', '^INDIAVIX', '^NSEBANK', '^CNXIT', '^NSEMDCP50']
@@ -150,7 +153,6 @@ if data_loaded:
     st.sidebar.markdown("### 🌍 Market Selection")
     selected_market = st.sidebar.radio("Choose Market", ["🇺🇸 US Market (S&P 500)", "🇮🇳 Indian Market (Nifty 500)"])
     
-    # Dynamically assign variables based on the selected market
     if selected_market == "🇺🇸 US Market (S&P 500)":
         market_type = "US"
         active_tickers, active_sectors, active_caps, active_matrices, active_benchmarks, main_index = us_tickers, us_sectors, us_caps, us_matrices, us_benchmarks, "^GSPC"
@@ -163,31 +165,45 @@ if data_loaded:
     st.sidebar.divider()
     st.sidebar.markdown("### ⚙️ Filters")
     
-    # Filter 1: Sector
     unique_sectors = sorted(list(set(active_sectors.values())))
     selected_sector = st.sidebar.selectbox("Filter by Sector", ["All Market"] + unique_sectors)
     
-    # Filter 2: Timeline Range
-    min_available_date = active_matrices['Price'].index[200].to_pydatetime() # Account for 200 DMA warmup
+    min_available_date = active_matrices['Price'].index[200].to_pydatetime() 
     max_available_date = active_matrices['Price'].index[-1].to_pydatetime()
-    default_start_date = max(min_available_date, datetime.datetime(2022, 1, 1)) # Default to Jan 2022 visually
+    default_start_date = max(min_available_date, datetime.datetime(2022, 1, 1)) 
     
     date_range = st.sidebar.slider("Timeline Range", min_value=min_available_date, max_value=max_available_date, value=(default_start_date, max_available_date))
 
-    # Apply Sector Filter
+    # --- SHARE BUTTONS LOGIC ---
+    st.sidebar.divider()
+    st.sidebar.markdown("### 📤 Share Dashboard")
+    st.sidebar.caption("Use the 'Camera' icon on any chart to download it as an image.")
+    
+    # Replace this with your actual deployed Streamlit URL once you have it
+    app_url = "https://your-app-url.streamlit.app" 
+    share_text = urllib.parse.quote(f"Check out this Live Global Market Breadth Dashboard powered by Karma Analytics! 📊📈")
+    
+    x_link = f"https://twitter.com/intent/tweet?text={share_text}&url={app_url}"
+    gmail_link = f"https://mail.google.com/mail/?view=cm&fs=1&su=Live Market Breadth Dashboard&body={share_text}%0A%0A{app_url}"
+
+    st.sidebar.markdown(f"""
+        <a href="{x_link}" target="_blank" class="share-btn btn-twitter">𝕏 Post to X</a>
+        <a href="{gmail_link}" target="_blank" class="share-btn btn-gmail">✉️ Share via Gmail</a>
+    """, unsafe_allow_html=True)
+
+    # --- HEADER TITLES ---
     if selected_sector == "All Market":
         target_universe = active_tickers
-        st.title(header_title)
+        st.markdown(f"<h1>{header_title}</h1>", unsafe_allow_html=True)
     else:
         target_universe = [t for t, s in active_sectors.items() if s == selected_sector]
-        st.title(f"{header_title.split(' ')[0]} {selected_sector} Breadth")
+        st.markdown(f"<h1>{header_title.split(' ')[0]} {selected_sector} Breadth</h1>", unsafe_allow_html=True)
         
+    st.markdown("<div class='powered-by'>powered by Karma Analytics and Advisory Ltd.</div>", unsafe_allow_html=True)
     st.caption(f"Live Data as of: **{max_available_date.strftime('%d %B %Y - %H:%M %p')}**")
 
     # Calculate Data
     breadth_ts, latest_cross_section = calculate_dynamic_breadth(active_matrices, target_universe, active_caps, market_type)
-    
-    # Apply Date Filter
     mask = (breadth_ts.index >= date_range[0]) & (breadth_ts.index <= date_range[1])
     breadth_ts = breadth_ts.loc[mask]
 
