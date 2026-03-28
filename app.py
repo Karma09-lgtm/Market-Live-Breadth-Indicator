@@ -18,10 +18,8 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. OPTION 1: DECOUPLED DATA ARCHITECTURE
+# 2. DECOUPLED DATA ARCHITECTURE
 # ==========================================
-# In the future, this function will be replaced by a simple API call to your Supabase/Redis database.
-# For now, it acts as our high-performance local cache.
 @st.cache_data(ttl=86400)
 def get_sp500_universe():
     url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
@@ -34,13 +32,38 @@ def get_sp500_universe():
     sector_mapping = dict(zip(table['Symbol'], table['GICS Sector']))
     return tickers, sector_mapping
 
+@st.cache_data(ttl=604800) # Cache Market Caps for 7 Days (Heavy operation)
+def get_market_caps(tickers):
+    caps = {}
+    cap_categories = {}
+    
+    # Using fast_info to bypass massive dictionary downloads
+    for ticker in tickers:
+        try:
+            cap = yf.Ticker(ticker).fast_info['marketCap']
+            caps[ticker] = cap
+            
+            # User-defined criteria
+            if cap >= 200_000_000_000:
+                cap_categories[ticker] = 'Mega'
+            elif cap >= 10_000_000_000:
+                cap_categories[ticker] = 'Large'
+            elif cap >= 2_000_000_000:
+                cap_categories[ticker] = 'Mid'
+            elif cap >= 250_000_000:
+                cap_categories[ticker] = 'Small'
+            else:
+                cap_categories[ticker] = 'Micro'
+        except:
+            cap_categories[ticker] = 'Unknown'
+            
+    return cap_categories
+
 @st.cache_data(ttl=3600)
 def fetch_core_market_matrix(tickers):
-    """Fetches raw prices and pre-calculates the heavy moving averages."""
     st.toast("Fetching live market data... This takes ~60 seconds.", icon="⏳")
     prices = yf.download(tickers, period="3y", auto_adjust=True, progress=False)['Close'].ffill()
     
-    # Pre-calculate indicators for all 500 stocks
     matrices = {
         'Price': prices,
         'SMA_20': prices.rolling(window=20).mean(),
@@ -54,25 +77,34 @@ def fetch_core_market_matrix(tickers):
     return matrices
 
 # ==========================================
-# 3. DYNAMIC BREADTH ENGINE (For Option 2)
+# 3. DYNAMIC BREADTH ENGINE 
 # ==========================================
-def calculate_dynamic_breadth(matrices, active_tickers):
-    """Calculates breadth on-the-fly based on the selected sector/tickers."""
-    # Filter matrices to only include active tickers
+def calculate_dynamic_breadth(matrices, active_tickers, cap_categories):
     p = matrices['Price'][active_tickers]
+    ema = matrices['EMA_30W'][active_tickers]
+    ema_ago = matrices['EMA_30W_1M_Ago'][active_tickers]
     
     breadth = pd.DataFrame(index=p.index)
+    
+    # 1. Standard Moving Averages
     breadth['pct_above_20'] = (p > matrices['SMA_20'][active_tickers]).mean(axis=1) * 100
     breadth['pct_above_50'] = (p > matrices['SMA_50'][active_tickers]).mean(axis=1) * 100
     breadth['pct_above_150'] = (p > matrices['SMA_150'][active_tickers]).mean(axis=1) * 100
     breadth['pct_above_200'] = (p > matrices['SMA_200'][active_tickers]).mean(axis=1) * 100
     
-    ema = matrices['EMA_30W'][active_tickers]
-    ema_ago = matrices['EMA_30W_1M_Ago'][active_tickers]
-    
+    # 2. Stage Analysis
     breadth['stage_2'] = ((p > ema) & (ema > ema_ago)).mean(axis=1) * 100
     breadth['stage_4'] = ((p < ema) & (ema < ema_ago)).mean(axis=1) * 100
     
+    # 3. Market Cap Based 30W EMA Breadth (Historical calculation)
+    is_above_30w = p > ema
+    for cap_tier in ['Mega', 'Large', 'Mid', 'Small', 'Micro']:
+        tier_tickers = [t for t in active_tickers if cap_categories.get(t) == cap_tier]
+        if tier_tickers:
+            breadth[f'30w_{cap_tier}'] = is_above_30w[tier_tickers].mean(axis=1) * 100
+        else:
+            breadth[f'30w_{cap_tier}'] = 0 # Handle empty buckets safely
+            
     # Cross section for the absolute latest day
     latest = pd.DataFrame({
         'Price': p.iloc[-1],
@@ -85,6 +117,7 @@ def calculate_dynamic_breadth(matrices, active_tickers):
 # --- INITIALIZE DATA ---
 try:
     sp500_tickers, sp500_sectors = get_sp500_universe()
+    market_cap_categories = get_market_caps(sp500_tickers)
     core_matrices = fetch_core_market_matrix(sp500_tickers)
     data_loaded = True
 except Exception as e:
@@ -92,22 +125,19 @@ except Exception as e:
     data_loaded = False
 
 # ==========================================
-# 4. OPTION 2: INTERACTIVE SIDEBAR & FILTERS
+# 4. INTERACTIVE SIDEBAR & FILTERS
 # ==========================================
 if data_loaded:
     st.sidebar.image("https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/S%26P_500_logo.svg/512px-S%26P_500_logo.svg.png", width=150)
     st.sidebar.header("Control Panel")
     
-    # FILTER 1: Sector Selection
     unique_sectors = sorted(list(set(sp500_sectors.values())))
     selected_sector = st.sidebar.selectbox("Filter by Sector", ["All S&P 500"] + unique_sectors)
     
-    # FILTER 2: Date Range Slider
-    min_date = core_matrices['Price'].index[200].to_pydatetime() # Offset by 200 to account for SMA warmup
+    min_date = core_matrices['Price'].index[200].to_pydatetime() 
     max_date = core_matrices['Price'].index[-1].to_pydatetime()
     date_range = st.sidebar.slider("Date Range", min_value=min_date, max_value=max_date, value=(max_date - datetime.timedelta(days=365), max_date))
     
-    # FILTER 3: Individual Ticker Lookup
     st.sidebar.divider()
     st.sidebar.subheader("Stock Lookup")
     search_ticker = st.sidebar.text_input("Enter Ticker (e.g., AAPL, NVDA)").upper()
@@ -122,11 +152,9 @@ if data_loaded:
         
     st.caption(f"Analyzing {len(active_universe)} stocks | Last Sync: {max_date.strftime('%d %b %Y')}")
 
-    # Calculate dynamic breadth for the chosen sector
-    breadth_ts, latest_cross_section = calculate_dynamic_breadth(core_matrices, active_universe)
+    breadth_ts, latest_cross_section = calculate_dynamic_breadth(core_matrices, active_universe, market_cap_categories)
     latest_cross_section['Sector'] = latest_cross_section.index.map(sp500_sectors)
     
-    # Apply Date Filter to Time Series
     mask = (breadth_ts.index >= date_range[0]) & (breadth_ts.index <= date_range[1])
     breadth_ts = breadth_ts.loc[mask]
 
@@ -140,24 +168,22 @@ if data_loaded:
         t_ema = t_data['30W_EMA']
         pct_from_ema = ((t_price - t_ema) / t_ema) * 100
         
-        # Determine Stage
         ema_now = core_matrices['EMA_30W'][search_ticker].iloc[-1]
         ema_ago = core_matrices['EMA_30W_1M_Ago'][search_ticker].iloc[-1]
+        
         if t_price > ema_now and ema_now > ema_ago:
             stage = "🟢 Stage 2 (Uptrend)"
         elif t_price < ema_now and ema_now < ema_ago:
             stage = "🔴 Stage 4 (Downtrend)"
         else:
-            stage = "🟡 Transitioning (Stage 1 or 3)"
+            stage = "🟡 Transitioning"
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Current Price", f"${t_price:.2f}")
         c2.metric("Distance from 30W EMA", f"{pct_from_ema:.2f}%")
-        c3.metric("Distance from 52W High", f"{((t_price - t_data['52W_High'])/t_data['52W_High'])*100:.2f}%")
+        c3.metric("Size Tier", market_cap_categories.get(search_ticker, "Unknown"))
         c4.info(f"**Trend:** {stage}")
         st.divider()
-    elif search_ticker:
-        st.warning("Ticker not found in the S&P 500 universe.")
 
     # ==========================================
     # 6. DASHBOARD LAYOUT
@@ -165,7 +191,9 @@ if data_loaded:
     def plot_line_chart(title, traces_dict, df_timeseries, y_range=[0, 100], hline=None):
         fig = go.Figure()
         for name, col_name, color in traces_dict:
-            fig.add_trace(go.Scatter(x=df_timeseries.index, y=df_timeseries[col_name], mode='lines', name=name, line=dict(width=1.5, color=color)))
+            # Only plot lines where the data isn't universally zero (removes empty Small/Micro cap lines)
+            if df_timeseries[col_name].sum() > 0:
+                fig.add_trace(go.Scatter(x=df_timeseries.index, y=df_timeseries[col_name], mode='lines', name=name, line=dict(width=1.5, color=color)))
         if hline:
             fig.add_hline(y=hline, line_dash="solid", line_color="red", line_width=1)
         fig.update_layout(
@@ -179,8 +207,15 @@ if data_loaded:
     r1_col1, r1_col2, r1_col3 = st.columns([1, 1, 1])
 
     with r1_col1:
-        traces = [("% > 200 SMA", 'pct_above_200', "#A0D468"), ("% > 50 SMA", 'pct_above_50', "#ED5565")]
-        st.plotly_chart(plot_line_chart("Trend Breadth (% > SMAs)", traces, breadth_ts), use_container_width=True)
+        # NEW CHART: % Above 30W EMA categorized by Market Cap
+        traces = [
+            ("Mega-Cap (> $200B)", '30w_Mega', "#5D9CEc"), 
+            ("Large-Cap ($10B - $200B)", '30w_Large', "#A0D468"),
+            ("Mid-Cap ($2B - $10B)", '30w_Mid', "#ED5565"),
+            ("Small-Cap ($250M - $2B)", '30w_Small', "#FFCE54"),
+            ("Micro-Cap (< $250M)", '30w_Micro', "#AC92EC")
+        ]
+        st.plotly_chart(plot_line_chart("% Above 30W EMA by Market Cap", traces, breadth_ts), use_container_width=True)
 
     with r1_col2:
         traces = [("Stage 2 (Uptrend)", 'stage_2', "#48CFAD"), ("Stage 4 (Downtrend)", 'stage_4', "#FC6E51")]
@@ -214,4 +249,4 @@ if data_loaded:
         bottom_extended.reset_index(inplace=True)
         bottom_extended.rename(columns={'index': 'Symbol', 'Pct_From_30W': '% from 30W EMA'}, inplace=True)
         st.dataframe(bottom_extended.style.background_gradient(subset=['% from 30W EMA'], cmap='coolwarm_r').format({'% from 30W EMA': "{:.2f}%"}), hide_index=True, use_container_width=True)
-    
+        
